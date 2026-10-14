@@ -1,0 +1,12 @@
+pyserial>=3.5,<4
+psutil>=5.9,<8
+Pillow>=10,<13
+pyinstaller>=6,<7
+pywin32>=306
+imageio-ffmpeg>=0.5,<1
+winrt-Windows.Media.Control>=3.0; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=3.0; sys_platform == "win32"
+winrt-Windows.Foundation>=3.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.0; sys_platform == "win32"
+
+pystray>=0.19.5,<1

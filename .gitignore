@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+# Build outputs
+build/
+dist/
+*.spec
+sensor_bridge/bin/
+sensor_bridge/obj/
+sensor_bridge/publish/
+# Local user data and logs
+settings.json
+*.log
+*.tmp
+*.turmo
+.env
+.env.*
+!.env.example
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

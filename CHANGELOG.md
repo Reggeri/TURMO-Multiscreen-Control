@@ -153,3 +153,6 @@
 
 ## v0.28.33
 - Studio UI: refreshed dark palette, typography, navigation, cards and controls. Display functionality unchanged.
+
+## v0.28.34
+- Version synchronization and safe updater process shutdown, desktop shortcut, post-update relaunch.

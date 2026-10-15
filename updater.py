@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-VERSION = '0.28.30'
+VERSION = '0.28.34'
 REPOSITORY = 'Reggeri/TURMO-Multiscreen-Control'
 API_URL = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
 MAX_DOWNLOAD = 250 * 1024 * 1024
@@ -86,15 +86,55 @@ def stage_install(new_exe):
     script = new_exe.parent / 'install-update.ps1'
     def ps_quote(value):
         return "'" + str(value).replace("'", "''") + "'"
+    # The installer is a separate PowerShell process. It never replaces a
+    # running executable and does not start the new version on failure.
     script.write_text(
         '$ErrorActionPreference = "Stop"\n'
         f'$oldPid = {os.getpid()}\n'
         f'$target = {ps_quote(current)}\n'
         f'$source = {ps_quote(new_exe)}\n'
-        'try { Wait-Process -Id $oldPid -Timeout 40 -ErrorAction SilentlyContinue } catch {}\n'
-        'Start-Sleep -Seconds 2\n'
-        'Copy-Item -LiteralPath $source -Destination $target -Force\n'
-        'Start-Process -FilePath $target\n', encoding='utf-8')
+        '$log = Join-Path (Split-Path -Parent $source) "install-result.log"\n'
+        'try {\n'
+        '  # Wait for the old process to exit; fail safely rather than race it.\n'
+        '  $old = Get-Process -Id $oldPid -ErrorAction SilentlyContinue\n'
+        '  if ($null -ne $old) {\n'
+        '    $old | Wait-Process -Timeout 90 -ErrorAction Stop\n'
+        '  }\n'
+        '  if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {\n'
+        '    throw "Old TURMO process is still running; update aborted."\n'
+        '  }\n'
+        '  if (-not (Test-Path -LiteralPath $source)) { throw "Downloaded EXE missing." }\n'
+        '  # Retry transient antivirus/file-lock interference, but never run an old EXE.\n'
+        '  $installed = $false\n'
+        '  for ($attempt = 0; $attempt -lt 10; $attempt++) {\n'
+        '    try {\n'
+        '      Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop\n'
+        '      $installed = $true\n'
+        '      break\n'
+        '    } catch { Start-Sleep -Seconds 2 }\n'
+        '  }\n'
+        '  if (-not $installed) { throw "Unable to replace the executable." }\n'
+        '  # Use Windows known-folder API so redirected/OneDrive Desktops work.\n'
+        '  try {\n'
+        '    $desktop = [Environment]::GetFolderPath("DesktopDirectory")\n'
+        '    if (-not $desktop) { throw "Desktop path unavailable" }\n'
+        '    $linkPath = Join-Path $desktop "TURMO Control.lnk"\n'
+        '    $shell = New-Object -ComObject WScript.Shell\n'
+        '    $shortcut = $shell.CreateShortcut($linkPath)\n'
+        '    $shortcut.TargetPath = $target\n'
+        '    $shortcut.WorkingDirectory = Split-Path -Parent $target\n'
+        '    $shortcut.IconLocation = "$target,0"\n'
+        '    $shortcut.Description = "TURMO Control"\n'
+        '    $shortcut.Save()\n'
+        '  } catch {\n'
+        '    # Shortcut failure must not prevent the successfully installed app launching.\n'
+        '    Add-Content -LiteralPath $log -Value ("Shortcut warning: " + $_.Exception.Message)\n'
+        '  }\n'
+        '  Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ErrorAction Stop\n'
+        '} catch {\n'
+        '  Add-Content -LiteralPath $log -Value ("Update failed: " + $_.Exception.Message)\n'
+        '  exit 1\n'
+        '}\n', encoding='utf-8')
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
     subprocess.Popen(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
                      creationflags=flags, close_fds=True)

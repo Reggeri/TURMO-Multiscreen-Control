@@ -1,6 +1,6 @@
 """Interactive 480x320 editor: drag text fields, image/MP4 background and colors."""
 from pathlib import Path
-from PIL import Image,ImageDraw,ImageFont
+from PIL import Image,ImageDraw,ImageFont,ImageOps
 from themes import font
 
 FIELDS=['time','date','cpu','cpu_temp','clock','ram','ram_used','disk','gpu_load','gpu_temp','gpu_hotspot','gpu_clock','gpu_power','gpu_fan','gpu_vram_used','rx','tx','weather_temp','weather_feels','weather_humidity','weather_wind','weather_condition','weather_city']
@@ -22,10 +22,30 @@ def widget_font(name,size,bold=False):
     try:return ImageFont.truetype(str(path),size)
     except OSError:return font(size,bold)
 
+def fit_background(image, config):
+    """Transform static or video media to 480x320, with editable crop and placement."""
+    mode=config.get('media_fit','cover')
+    image=image.convert('RGB')
+    if mode=='stretch':return image.resize((480,320),Image.Resampling.LANCZOS)
+    if mode=='contain':
+        canvas=Image.new('RGB',(480,320),config.get('background','#101827'))
+        thumb=ImageOps.contain(image,(480,320),Image.Resampling.LANCZOS)
+        canvas.paste(thumb,((480-thumb.width)//2,(320-thumb.height)//2))
+        return canvas
+    zoom=max(1.,min(4.,float(config.get('media_zoom',1.0))))
+    ratio=max(480/image.width,320/image.height)*zoom
+    w=max(480,round(image.width*ratio));h=max(320,round(image.height*ratio))
+    scaled=image.resize((w,h),Image.Resampling.LANCZOS)
+    # 0..100 is the position of the image inside its overflow (50=center).
+    px=max(0.,min(1.,float(config.get('media_x',50))/100))
+    py=max(0.,min(1.,float(config.get('media_y',50))/100))
+    left=round((w-480)*px);top=round((h-320)*py)
+    return scaled.crop((left,top,left+480,top+320))
+
 def render(config,values,background=None):
     from themes import fmt,gib
     if background is not None:
-        im=background.convert('RGB').resize((480,320)).copy()
+        im=fit_background(background,config)
     else:
         try:im=Image.new('RGB',(480,320),config.get('background','#101827'))
         except ValueError:im=Image.new('RGB',(480,320),'#101827')
@@ -57,5 +77,5 @@ def load_background(config):
     try:
         with Image.open(path) as im:
             from PIL import ImageOps
-            return ImageOps.fit(im.convert('RGB'),(480,320))
+            return im.convert('RGB').copy()
     except (OSError,ValueError):return None

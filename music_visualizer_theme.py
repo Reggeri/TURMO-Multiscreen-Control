@@ -77,7 +77,7 @@ class MusicVisualizer:
                 self._title_strip=strip
             # ~20 px/sec at ~8 FPS = 2-3 px per frame. Avoid
             # rebuilding the text strip on each screen refresh.
-            speed=20.0
+            speed=17.0
             offset=int((time.monotonic()-self._marquee_started)*speed)%(full_w+gap)
             segment=self._title_strip.crop((offset,0,offset+viewport_w,43))
             image.paste(segment,(239,108),segment)
@@ -105,7 +105,7 @@ class MusicVisualizer:
             end=stamp(duration)
             d.text((x2-d.textlength(end,font=self.tiny),235),end,font=self.tiny,fill=text)
         elif data.get('music_title'):
-            d.text((241,231),'TIME NOT PROVIDED',font=self.tiny,fill=(193,201,215))
+            d.text((241,231),'LIVE  •  TIME UNAVAILABLE',font=self.tiny,fill=(193,201,215))
         # clock + current weather occupy the same clean top and bottom bands
         d.text((28,15),datetime.now().strftime('%H:%M'),font=self.bold,fill=text)
         city=str(data.get('weather_city') or 'WEATHER').upper()

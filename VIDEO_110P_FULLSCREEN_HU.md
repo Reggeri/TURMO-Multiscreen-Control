@@ -1,0 +1,1 @@
+110p FULLSCREEN: 160x110 forras felmeretezve a teljes 480x320 kijelzore. A kijelzo nem tamogat igazolt hardveres nagyitast, ezert 300 KiB/kepkocka atvitel szukseges. Ez a mod varhatoan lassabb a 96x72 kompakt modnal. A tobbi tema nem valtozott.

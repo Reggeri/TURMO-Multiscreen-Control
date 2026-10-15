@@ -19,7 +19,7 @@ echo === Installing Python requirements ===
 py -3.11 -m pip install -r requirements.txt
 if errorlevel 1 goto python_failed
 echo === Building TURMO Control ===
-py -3.11 -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --name TURMO-Control --collect-binaries imageio_ffmpeg --collect-submodules winrt.windows.foundation --collect-submodules winrt.windows.foundation.collections --collect-submodules winrt.windows.media.control --collect-submodules winrt.windows.storage.streams --add-data "nexus26_assets;nexus26_assets" --add-data "original_themes;original_themes" --add-data "music_visualizer_assets;music_visualizer_assets" --add-data "locales.json;." --add-binary "sensor_bridge\publish\SensorBridge.exe;." app.py
+py -3.11 -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --name TURMO-Control --collect-binaries imageio_ffmpeg --collect-all soundcard --collect-submodules winrt.windows.foundation --collect-submodules winrt.windows.foundation.collections --collect-submodules winrt.windows.media.control --collect-submodules winrt.windows.storage.streams --add-data "nexus26_assets;nexus26_assets" --add-data "original_themes;original_themes" --add-data "music_visualizer_assets;music_visualizer_assets" --add-data "locales.json;." --add-binary "sensor_bridge\publish\SensorBridge.exe;." app.py
 if errorlevel 1 goto python_failed
 if not exist "dist\TURMO-Control.exe" goto python_failed
 echo SUCCESS: dist\TURMO-Control.exe

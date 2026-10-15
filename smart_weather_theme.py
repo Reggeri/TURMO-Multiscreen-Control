@@ -1,82 +1,79 @@
-"""Smart Weather Clock: original 480x320 TURMO theme, TRUE VIEW inspired."""
+"""Premium, clean 480x320 smart clock and weather dashboard."""
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
-import math,sys
+import math
+import sys
+from PIL import Image, ImageDraw, ImageFont
 
-W,H=480,320
-ROOT=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'original_themes'/'TRUE_VIEW_26'/'fonts'
+W, H = 480, 320
+FONTS = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent)) / 'nexus26_assets'
 
-def font(size,bold=False):
-    for file in (('Roboto-Bold.ttf' if bold else 'Roboto-Regular.ttf'),'Roboto-Bold.ttf'):
-        try:return ImageFont.truetype(str(ROOT/file),size)
-        except OSError:pass
-    return ImageFont.load_default()
+def font(size, bold=False):
+    try:
+        return ImageFont.truetype(str(FONTS / ('Roboto-Bold.ttf' if bold else 'Roboto-Regular.ttf')), size)
+    except OSError:
+        return ImageFont.load_default()
 
 class SmartWeatherClock:
     def __init__(self):
-        self.big=font(78,True);self.medium=font(28,True);self.body=font(16,True)
-        self.small=font(13);self.tiny=font(11);self.micro=font(10,True)
-    def render(self,data):
-        d=data or {}
-        img=Image.new('RGB',(W,H),(9,18,34));g=ImageDraw.Draw(img)
-        # Subtle sky gradient
+        self.clock = font(91, True)
+        self.temp = font(49, True)
+        self.head = font(17, True)
+        self.body = font(15)
+        self.small = font(12)
+        self.mini = font(11, True)
+        self.base = self._background()
+
+    def _background(self):
+        img = Image.new('RGB', (W,H))
+        p = img.load()
         for y in range(H):
-            t=y/H
-            g.line((0,y,W,y),fill=(int(10+7*t),int(23+9*t),int(43+12*t)))
-        CYAN=(115,224,249);WHITE=(235,247,255);MUTED=(142,170,194);LINE=(54,79,104)
-        now=datetime.now()
-        g.text((19,12),'WEATHER  /  SMART CLOCK',font=self.micro,fill=CYAN)
-        city=str(d.get('weather_city') or '').upper()[:23]
-        g.text((460,12),city,font=self.micro,fill=MUTED,anchor='ra')
-        g.line((18,33,462,33),fill=LINE,width=1)
-        g.text((18,41),now.strftime('%H:%M'),font=self.big,fill=WHITE,stroke_width=0)
-        g.text((23,128),now.strftime('%A  •  %Y.%m.%d'),font=self.small,fill=MUTED)
-        condition=str(d.get('weather_condition') or 'Weather unavailable')
-        c=condition.lower()
-        icon='☀' if 'clear' in c or 'sun' in c else ('☂' if 'rain' in c or 'shower' in c else ('❄' if 'snow' in c else '☁'))
-        temp=d.get('weather_temp')
-        try:temperature=f'{float(temp):.0f}°' if temp is not None else '--°'
-        except (ValueError,TypeError):temperature='--°'
-        g.text((460,46),temperature,font=self.medium,fill=CYAN,anchor='ra')
-        g.text((458,86),condition[:23],font=self.small,fill=WHITE,anchor='ra')
-        feel=d.get('weather_feels');humidity=d.get('weather_humidity')
-        details=[]
-        if feel is not None:
-            try:details.append(f'Feels {float(feel):.0f}°')
-            except (ValueError,TypeError):pass
-        if humidity is not None:
-            try:details.append(f'Humidity {float(humidity):.0f}%')
-            except (ValueError,TypeError):pass
-        g.text((458,109),'  ·  '.join(details),font=self.tiny,fill=MUTED,anchor='ra')
-        # Compact sensor ribbon
-        g.rounded_rectangle((16,160,464,224),radius=11,fill=(20,37,57),outline=LINE,width=1)
-        def fmt(k,unit='%',dec=0):
-            v=d.get(k)
-            try:return f'{float(v):.{dec}f}{unit}' if v is not None else '--'
-            except (TypeError,ValueError):return '--'
-        blocks=[('CPU',fmt('cpu'),fmt('cpu_temp','°C')),('GPU',fmt('gpu_load'),fmt('gpu_temp','°C'))]
-        for i,(label,load,t) in enumerate(blocks):
-            x=32+i*222
-            g.text((x,172),label,font=self.micro,fill=CYAN)
-            g.text((x,188),load,font=self.body,fill=WHITE)
-            g.text((x+112,190),t,font=self.small,fill=MUTED)
-            if i==0:g.line((240,170,240,213),fill=LINE,width=1)
-        # Music strip, with clipping/truncation to preserve 480x320 geometry
-        g.rounded_rectangle((16,235,464,305),radius=12,fill=(24,42,65),outline=(57,91,119),width=1)
-        g.text((30,245),'♫  NOW PLAYING',font=self.micro,fill=CYAN)
-        title=str(d.get('music_title') or '')
-        artist=str(d.get('music_artist') or '')
-        if not title:
-            title='No active media'
-            artist='Play music in a Windows media app'
-        def fit(s,f,maxw):
-            while s and g.textlength(s,font=f)>maxw:s=s[:-1]
-            return s if len(s)==0 or s==str(s) and g.textlength(s,font=f)<=maxw else s
-        def ellipsis(s,f,maxw):
-            if g.textlength(s,font=f)<=maxw:return s
-            while s and g.textlength(s+'…',font=f)>maxw:s=s[:-1]
-            return s+'…'
-        g.text((30,263),ellipsis(title,self.body,414),font=self.body,fill=WHITE)
-        g.text((30,285),ellipsis(artist,self.tiny,414),font=self.tiny,fill=MUTED)
+            for x in range(W):
+                glow = max(0, 1 - math.hypot((x-415)/440, (y-30)/320))
+                p[x,y] = (round(7+8*glow), round(13+19*glow), round(26+35*glow))
+        return img
+
+    @staticmethod
+    def ellipsis(draw, text, f, width):
+        text = str(text or '')
+        if draw.textlength(text,font=f) <= width: return text
+        while text and draw.textlength(text+'…',font=f)>width: text=text[:-1]
+        return text+'…'
+
+    def render(self, data):
+        data = data or {}
+        img = self.base.copy()
+        g = ImageDraw.Draw(img)
+        white = (246,249,255)
+        muted = (143,163,190)
+        cyan = (104,221,244)
+        now = datetime.now()
+        g.rounded_rectangle((16,15,464,216),radius=22,fill=(17,30,48),outline=(37,57,80),width=1)
+        g.rounded_rectangle((16,229,464,304),radius=18,fill=(19,33,52),outline=(37,57,80),width=1)
+        g.text((33,30),'SMART  /  WEATHER',font=self.mini,fill=cyan)
+        city = str(data.get('weather_city') or 'YOUR CITY').upper()
+        g.text((447,30),self.ellipsis(g,city,self.mini,172),font=self.mini,fill=muted,anchor='ra')
+        g.text((26,51),now.strftime('%H:%M'),font=self.clock,fill=white)
+        g.text((35,156),now.strftime('%A, %d %B %Y'),font=self.body,fill=muted)
+        g.line((282,66,282,182),fill=(52,74,96),width=2)
+        temp = data.get('weather_temp')
+        try: temp_text = f'{round(float(temp))}°'
+        except (ValueError,TypeError): temp_text = '--°'
+        g.text((305,75),temp_text,font=self.temp,fill=cyan)
+        condition = str(data.get('weather_condition') or 'Weather unavailable')
+        g.text((307,142),self.ellipsis(g,condition,self.body,137),font=self.body,fill=white)
+        g.text((307,166),'LOCAL WEATHER',font=self.mini,fill=muted)
+        # Minimal sensor cards with honest unavailable placeholders.
+        def fmt(key, unit):
+            try:
+                v=data.get(key)
+                return f'{round(float(v))}{unit}' if v is not None else '--'
+            except (TypeError,ValueError): return '--'
+        for x,label,value,accent in ((33,'CPU',fmt('cpu_temp','°C'),cyan),
+                                     (178,'GPU',fmt('gpu_temp','°C'),(180,159,255)),
+                                     (326,'RAM',fmt('ram','%'),(123,225,184))):
+            g.text((x,242),label,font=self.mini,fill=accent)
+            g.text((x,258),value,font=self.head,fill=white)
+        g.line((161,242,161,289),fill=(49,68,88))
+        g.line((308,242,308,289),fill=(49,68,88))
         return img

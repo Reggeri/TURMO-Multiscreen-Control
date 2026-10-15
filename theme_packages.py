@@ -22,6 +22,10 @@ def _validate(config):
     if not isinstance(result['background'],str) or len(result['background'])>32:raise ThemePackageError('Invalid background')
     try:result['fps']=max(1,min(20,int(result['fps'])))
     except (TypeError,ValueError):raise ThemePackageError('Invalid FPS')
+    result['media_fit']=config.get('media_fit','cover') if config.get('media_fit','cover') in ('cover','contain','stretch') else 'cover'
+    for k,default,lo,hi in (('media_zoom',1.,1.,4.),('media_x',50.,0.,100.),('media_y',50.,0.,100.)):
+        try:result[k]=max(lo,min(hi,float(config.get(k,default))))
+        except (TypeError,ValueError):result[k]=default
     for item in config['widgets']:
         if not isinstance(item,dict):raise ThemePackageError('Invalid widget')
         try:

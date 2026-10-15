@@ -7,9 +7,11 @@ import time
 import traceback
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from serial.tools import list_ports
 from pathlib import Path
+from updater import VERSION, check_and_update
+from remote_control import RemoteServer, PreviewCache, lan_ip, PORT
 import json
 from PIL import Image, ImageDraw, ImageTk, ImageEnhance
 from editor import default_layout, render as render_custom, load_background
@@ -22,10 +24,14 @@ from nexus26_native import Nexus26
 from original_adapter import OriginalTheme, NAMES as ORIGINAL_NAMES
 from smart_weather_theme import SmartWeatherClock
 from music_visualizer_theme import MusicVisualizer
+from music_visualizer_v2 import MusicVisualizerV2
+from full_screen_eq import FullScreenEQ
+from midnight_eq import MidnightEQ
+from auto_theme import select_theme
 from now_playing import NowPlaying
 from themes import system, gpu, test_pattern, neon_system, neon_gpu, minimal_system, minimal_gpu
 
-RENDER = {'System': system, 'GPU': gpu, 'System Neon': neon_system, 'GPU Neon': neon_gpu, 'System Minimal': minimal_system, 'GPU Minimal': minimal_gpu, 'Test': lambda _: test_pattern(), 'Custom': None, 'NEXUS 26 (Original)': None, 'SMART WEATHER CLOCK': None, 'MUSIC VISUALIZER': None, **{name:None for name in ORIGINAL_NAMES}}
+RENDER = {'System': system, 'GPU': gpu, 'System Neon': neon_system, 'GPU Neon': neon_gpu, 'System Minimal': minimal_system, 'GPU Minimal': minimal_gpu, 'Test': lambda _: test_pattern(), 'Custom': None, 'NEXUS 26 (Original)': None, 'SMART WEATHER CLOCK': None, 'MUSIC VISUALIZER': None, 'MUSIC VISUALIZER 2.0': None, 'FULL SCREEN COLOR EQ': None, 'MIDNIGHT EQ': None, 'AUTO / SMART MODE': None, 'VIDEO PLAYER': None, **{name:None for name in ORIGINAL_NAMES}}
 USB_VID, USB_PID = 0x1A86, 0x5722
 SETTINGS = Path(os.environ.get('APPDATA') or Path.home()) / 'TURMO-Control' / 'settings.json'
 
@@ -118,33 +124,59 @@ class Telemetry(threading.Thread):
             self.events.put(('Sensors', 'ERROR: ' + str(exc)))
 
 class ScreenThread(threading.Thread):
-    def __init__(self, port, theme, transport, telemetry, events, stop, config=None, brightness=None):
+    def __init__(self, port, theme, transport, telemetry, events, stop, config=None, brightness=None, preview_cache=None, display_index=None):
         super().__init__(daemon=True)
         self.port,self.theme,self.transport,self.telemetry,self.events,self.stop = port,theme,transport,telemetry,events,stop
         self.config=config or default_layout()
         self.brightness=brightness
-        self.nexus=Nexus26() if theme=='NEXUS 26 (Original)' else (OriginalTheme(theme) if theme in ORIGINAL_NAMES else (SmartWeatherClock() if theme=='SMART WEATHER CLOCK' else (MusicVisualizer() if theme=='MUSIC VISUALIZER' else None)))
+        self.preview_cache=preview_cache
+        self.display_index=display_index
+        self.auto_visualizers={'MUSIC VISUALIZER 2.0':MusicVisualizerV2(), 'GPU Neon':None, 'SMART WEATHER CLOCK':SmartWeatherClock(), 'System Neon':None} if theme=='AUTO / SMART MODE' else {}
+        self.midnight=MidnightEQ() if theme=='MIDNIGHT EQ' else None
+        self.nexus=Nexus26() if theme=='NEXUS 26 (Original)' else (OriginalTheme(theme) if theme in ORIGINAL_NAMES else (SmartWeatherClock() if theme=='SMART WEATHER CLOCK' else (MusicVisualizer() if theme=='MUSIC VISUALIZER' else (MusicVisualizerV2() if theme=='MUSIC VISUALIZER 2.0' else (FullScreenEQ() if theme=='FULL SCREEN COLOR EQ' else None)))))
     def run(self):
         video=None
+        video_sequence=0
         try:
             orientation = 3 if self.transport == 'Firmware reverse' else 1
-            if self.theme=='Custom' and self.config.get('media','').lower().endswith('.mp4'):
+            if self.theme=='VIDEO PLAYER':
+                video=VideoSource(self.config['video_path'], fps=self.config.get('video_fps',25),
+                                  fit=self.config.get('video_fit','Cover'),
+                                  resolution=self.config.get('video_resolution',240))
+            elif self.theme=='Custom' and self.config.get('media','').lower().endswith('.mp4'):
                 video=VideoSource(self.config['media'],min(2,self.config.get('fps',2)))
             background=load_background(self.config) if self.theme=='Custom' else None
-            with Display(self.port,orientation,self.transport) as display:
+            if self.theme=='Custom' and self.config.get('phone_photo'):
+                self.events.put((self.port, 'Phone photo file: '+str(self.config.get('media'))+' | loaded='+str(background is not None)))
+                if background is None: raise FileNotFoundError('Phone photo cannot be opened: '+str(self.config.get('media'))) 
+            with Display(self.port,orientation,self.transport,video_mode=self.theme=='VIDEO PLAYER') as display:
+                display.eq_sparse = self.theme == 'FULL SCREEN COLOR EQ'
+                display.midnight_sparse = self.theme == 'MIDNIGHT EQ'
+                if self.theme=='VIDEO PLAYER':
+                    display.video_window=(160,110) if self.config.get('video_window')=='110p FULLSCREEN' else tuple(map(int,self.config.get('video_window','96x72').split('x')))
+                    display.video_fullscreen=self.config.get('video_window')=='110p FULLSCREEN'
                 stats_at=time.monotonic()
                 frames_sent=0
                 bytes_sent=0
                 self.events.put((self.port, 'Connected: '+self.theme+' / '+self.transport))
                 while not self.stop.is_set():
                     data = self.telemetry.get() or {}
-                    if self.theme == 'Test':
+                    if self.theme == 'VIDEO PLAYER':
+                        frame,video_sequence=video.get_new(video_sequence) if video else (None,video_sequence)
+                        if frame is None:
+                            self.stop.wait(0.015)
+                            continue
+                    elif self.theme == 'Test':
                         frame = test_pattern()
                     elif self.theme == 'Custom':
                         bg=video.get() if video else background
                         frame=render_custom(self.config,data,bg)
-                    elif self.theme=='NEXUS 26 (Original)' or self.theme in ORIGINAL_NAMES or self.theme=='SMART WEATHER CLOCK' or self.theme=='MUSIC VISUALIZER':
-                        frame=self.nexus.render(data)
+                    elif self.theme=='AUTO / SMART MODE':
+                        chosen=select_theme(data)
+                        renderer=self.auto_visualizers[chosen]
+                        frame=renderer.render(data) if renderer else RENDER[chosen](data)
+                    elif self.theme=='NEXUS 26 (Original)' or self.theme in ORIGINAL_NAMES or self.theme=='SMART WEATHER CLOCK' or self.theme in ('MUSIC VISUALIZER','MUSIC VISUALIZER 2.0','FULL SCREEN COLOR EQ','MIDNIGHT EQ'):
+                        frame=self.midnight.render(data) if self.theme=='MIDNIGHT EQ' else self.nexus.render(data)
                     elif not data:
                         self.stop.wait(.3)
                         continue
@@ -153,7 +185,16 @@ class ScreenThread(threading.Thread):
                     if self.brightness is not None:
                         level=self.brightness.get()
                         if level<100:frame=ImageEnhance.Brightness(frame).enhance(level/100.0)
-                    display.send(frame,self.stop)
+                    # Publish only the reference to the frame already rendered for USB.
+                    # No extra rendering, polling, or JPEG work in the display loop.
+                    if self.preview_cache is not None:
+                        self.preview_cache.publish(self.display_index, frame)
+                    if self.theme == 'VIDEO PLAYER':
+                        display.send_video(frame,self.stop)
+                    elif self.theme == 'Custom' and self.config.get('phone_photo'):
+                        display.send_photo(frame,self.stop)
+                    else:
+                        display.send(frame,self.stop)
                     st=display.last_stats or {}
                     if st.get('bytes',0):
                         frames_sent+=1
@@ -169,7 +210,7 @@ class ScreenThread(threading.Thread):
                         frames_sent=0;bytes_sent=0;stats_at=now
                     # Music marquee needs frequent small partial USB updates.
                     # Other themes retain the ECO refresh cadence.
-                    self.stop.wait(0.12 if self.theme=='MUSIC VISUALIZER' else (1.0 if video else 2.0))
+                    self.stop.wait(0.001 if self.theme=='VIDEO PLAYER' else (0.025 if (self.theme in ('MUSIC VISUALIZER 2.0','FULL SCREEN COLOR EQ','MIDNIGHT EQ') or (self.theme=='AUTO / SMART MODE' and chosen=='MUSIC VISUALIZER 2.0')) else (0.12 if self.theme=='MUSIC VISUALIZER' else (1.0 if self.theme=='AUTO / SMART MODE' or video else 2.0))))
         except Exception as exc:
             self.events.put((self.port, 'ERROR: '+str(exc)+' | '+traceback.format_exc(limit=1).strip()))
         finally:
@@ -188,14 +229,17 @@ class BrightnessValue:
 class App:
     def __init__(self,root):
         self.root=root
-        root.title('TURMO Control v0.27')
-        root.geometry('1040x760')
-        root.minsize(860,650)
-        root.configure(bg='#0c111c')
+        root.title(f'TURMO Control v{VERSION}')
+        root.geometry('1120x790')
+        root.minsize(900,680)
+        root.configure(bg='#0A0F19')
         self._setup_style(root)
         self.events=queue.Queue()
         self.stop=threading.Event()
         self.threads=[]
+        self.remote_commands=queue.Queue()
+        self.remote_server=None
+        self.remote_previews=PreviewCache()
         self.telemetry=None
         self.images=[]
         self.tray_icon=None
@@ -215,10 +259,15 @@ class App:
         self.custom_configs=self.settings.get('custom_configs',[default_layout(),default_layout()])
         if not isinstance(self.custom_configs,list) or len(self.custom_configs)!=2:self.custom_configs=[default_layout(),default_layout()]
         self.preview_videos=[None,None]
+        self.video_configs=self.settings.get('video_configs',[{},{}])
+        if not isinstance(self.video_configs,list) or len(self.video_configs)!=2:self.video_configs=[{},{}]
         self.nexus_previews=[Nexus26(),Nexus26()]
         self.original_previews=[{} for _ in range(2)]
         self.smart_previews=[SmartWeatherClock(),SmartWeatherClock()]
         self.music_previews=[MusicVisualizer(),MusicVisualizer()]
+        self.music_v2_previews=[MusicVisualizerV2(),MusicVisualizerV2()]
+        self.full_eq_previews=[FullScreenEQ(),FullScreenEQ()]
+        self.midnight_previews=[MidnightEQ(),MidnightEQ()]
         self.port_boxes=[]
         saved_brightness=self.settings.get('brightness',[100,100])
         if not isinstance(saved_brightness,list) or len(saved_brightness)!=2:saved_brightness=[100,100]
@@ -234,13 +283,13 @@ class App:
         self.music.start()
         # v0.27: simple header, a monitoring dashboard, a settings tab,
         # and a separate diagnostics tab. The underlying screen logic is unchanged.
-        bg='#0c111c';panel='#162337';fg='#eaf3ff';muted='#9aafc8';accent='#53c4ee'
+        bg='#0A0F19';panel='#141E2D';fg='#F2F6FC';muted='#91A5BC';accent='#63E2D2'
         header=tk.Frame(root,bg=bg)
-        header.pack(fill='x',padx=24,pady=(16,12))
+        header.pack(fill='x',padx=28,pady=(21,14))
         titlebox=tk.Frame(header,bg=bg)
         titlebox.pack(side='left',fill='x',expand=True)
-        tk.Label(titlebox,text='TURMO',font=('Segoe UI',23,'bold'),bg=bg,fg=fg).pack(anchor='w')
-        tk.Label(titlebox,text='CONTROL  /  v0.27',font=('Segoe UI',9),bg=bg,fg=muted).pack(anchor='w')
+        tk.Label(titlebox,text='TURMO',font=('Segoe UI',27,'bold'),bg=bg,fg=fg).pack(anchor='w')
+        tk.Label(titlebox,text=f'MULTISCREEN STUDIO    •    VERSION {VERSION}',font=('Segoe UI',9,'bold'),bg=bg,fg=accent).pack(anchor='w',pady=(3,0))
         langbox=tk.Frame(header,bg=bg);langbox.pack(side='right')
         self._label(langbox,'language',bg=bg,fg=muted,font=('Segoe UI',9)).pack(anchor='w',pady=(0,4))
         self.language_combo=ttk.Combobox(langbox,state='readonly',width=21,
@@ -249,23 +298,29 @@ class App:
         self.language_combo.pack()
         self.language_combo.bind('<<ComboboxSelected>>',self._language_changed)
 
+        # Fine accent divider anchors the dashboard without a bulky banner.
+        tk.Frame(root,bg=accent,height=2).pack(fill='x',padx=28,pady=(0,12))
         tabs=ttk.Notebook(root,style='TNotebook')
-        tabs.pack(fill='both',expand=True,padx=20,pady=(0,14))
+        tabs.pack(fill='both',expand=True,padx=24,pady=(0,16))
         dashboard=tk.Frame(tabs,bg=bg)
         settings_tab=tk.Frame(tabs,bg=bg)
         logs_tab=tk.Frame(tabs,bg=bg)
+        remote_tab=tk.Frame(tabs,bg=bg)
+        video_tab=tk.Frame(tabs,bg=bg)
         tabs.add(dashboard,text='  '+self._tr('dashboard')+'  ')
         tabs.add(settings_tab,text='  '+self._tr('settings_tab')+'  ')
         tabs.add(logs_tab,text='  '+self._tr('diagnostics')+'  ')
+        tabs.add(remote_tab,text='  Phone Remote  ')
+        tabs.add(video_tab,text='  Video  ')
         self.tabs=tabs
 
         toolbar=tk.Frame(dashboard,bg=bg)
         toolbar.pack(fill='x',padx=14,pady=(18,10))
         def action(key,command,primary=False):
-            return self._button(toolbar,key,command=command,bg=accent if primary else '#283c56',
-                fg='#08131e' if primary else fg,font=('Segoe UI',10,'bold'),
-                activebackground='#7ddaf3' if primary else '#354c67',
-                activeforeground='#08131e' if primary else fg,
+            return self._button(toolbar,key,command=command,bg=accent if primary else '#23344B',
+                fg='#07151C' if primary else fg,font=('Segoe UI',10,'bold'),
+                activebackground='#95F2E6' if primary else '#314962',
+                activeforeground='#07151C' if primary else fg,
                 relief='flat',borderwidth=0,padx=16,pady=10,cursor='hand2')
         action('start',self.start,True).pack(side='left',padx=(0,8))
         action('stop',self.halt).pack(side='left',padx=(0,8))
@@ -274,16 +329,16 @@ class App:
 
         preview_heading=tk.Frame(dashboard,bg=bg)
         preview_heading.pack(fill='x',padx=18,pady=(12,8))
-        tk.Label(preview_heading,text='LIVE PREVIEW',font=('Segoe UI',11,'bold'),bg=bg,fg=fg).pack(side='left')
+        tk.Label(preview_heading,text='LIVE PREVIEW',font=('Segoe UI',11,'bold'),bg=bg,fg=accent).pack(side='left')
         self.pvlabels=[]
         pv=tk.Frame(dashboard,bg=bg)
         pv.pack(fill='both',expand=True,padx=12,pady=(0,12))
         for i in range(2):
-            pane=tk.Frame(pv,bg=panel,highlightbackground='#263b54',highlightthickness=1)
+            pane=tk.Frame(pv,bg=panel,highlightbackground='#2A4057',highlightthickness=1)
             pane.pack(side='left',fill='both',expand=True,padx=6)
             self._label(pane,'preview',n=i+1,bg=panel,fg=muted,
                         font=('Segoe UI',10,'bold')).pack(anchor='w',padx=14,pady=(13,9))
-            lbl=tk.Label(pane,bg='#101a29',width=365,height=243)
+            lbl=tk.Label(pane,bg='#0C1522',width=365,height=243)
             lbl.pack(expand=True,padx=10,pady=(0,16))
             self.pvlabels.append(lbl)
         self.status=self._label(dashboard,'status_wait',bg=bg,fg=muted,anchor='w',font=('Segoe UI',9))
@@ -292,7 +347,7 @@ class App:
         # Configuration is kept off the dashboard so everyday use is uncluttered.
         config_top=tk.Frame(settings_tab,bg=bg)
         config_top.pack(fill='x',padx=18,pady=(18,4))
-        tk.Label(config_top,text='DISPLAY CONFIGURATION',font=('Segoe UI',11,'bold'),bg=bg,fg=fg).pack(anchor='w')
+        tk.Label(config_top,text='DISPLAY CONFIGURATION',font=('Segoe UI',11,'bold'),bg=bg,fg=accent).pack(anchor='w')
         devices=discover_screens()
         ports=[p.device for p in devices]
         preferred=self.settings.get('ports',[])
@@ -300,7 +355,7 @@ class App:
             ports=preferred+[x for x in ports if x not in preferred]
         self.pvars=[];self.tvars=[];self.ovars=[]
         for i in range(2):
-            card=tk.Frame(settings_tab,bg=panel,highlightbackground='#263b54',highlightthickness=1)
+            card=tk.Frame(settings_tab,bg=panel,highlightbackground='#2A4057',highlightthickness=1)
             card.pack(fill='x',padx=18,pady=7)
             self._label(card,'screen',n=i+1,bg=panel,fg=fg,font=('Segoe UI',11,'bold')).pack(anchor='w',padx=14,pady=(10,7))
             fields=tk.Frame(card,bg=panel);fields.pack(fill='x',padx=12,pady=(0,8))
@@ -326,7 +381,7 @@ class App:
                      command=lambda v,index=i:self._brightness_changed(index,v),bg=panel,fg=fg,
                      troughcolor='#293b52',highlightthickness=0,bd=0).pack(side='left')
 
-        extras=tk.Frame(settings_tab,bg=panel,highlightbackground='#263b54',highlightthickness=1)
+        extras=tk.Frame(settings_tab,bg=panel,highlightbackground='#2A4057',highlightthickness=1)
         extras.pack(fill='x',padx=18,pady=(8,6))
         weatherbar=tk.Frame(extras,bg=panel);weatherbar.pack(fill='x',padx=12,pady=(12,5))
         self._label(weatherbar,'weather_city',bg=panel,fg=fg).pack(side='left',padx=(0,10))
@@ -335,14 +390,64 @@ class App:
         self._button(weatherbar,'search_update',command=self.update_weather,bg='#304a66',fg=fg,
                      relief='flat',padx=10,pady=6).pack(side='left')
         self._label(extras,'updates',bg=panel,fg=muted,font=('Segoe UI',8)).pack(anchor='w',padx=14,pady=(0,8))
+        update_row=tk.Frame(extras,bg=panel);update_row.pack(fill='x',padx=12,pady=(0,9))
+        tk.Button(update_row,text='Check for updates',command=self.check_updates,
+                  bg='#304a66',fg=fg,activebackground='#426584',relief='flat',
+                  padx=12,pady=7,cursor='hand2').pack(side='left')
+        self.update_status=tk.StringVar(value=f'Installed version: v{VERSION}')
+        tk.Label(update_row,textvariable=self.update_status,bg=panel,fg=muted,
+                 font=('Segoe UI',9)).pack(side='left',padx=12)
         startup_row=tk.Frame(extras,bg=panel);startup_row.pack(fill='x',padx=12,pady=(2,12))
         self.startup_enabled=tk.BooleanVar(value=startup_is_enabled())
         self.startup_checkbox=tk.Checkbutton(startup_row,text=self._tr('startup'),variable=self.startup_enabled,
             command=self._toggle_startup,bg=panel,fg=fg,activebackground=panel,
-            activeforeground=fg,selectcolor='#25364d')
+            activeforeground=fg,selectcolor='#1C3044')
         self.startup_checkbox.pack(side='left')
         self.translatable.append((self.startup_checkbox,'startup',{}))
         self._label(startup_row,'startup_note',bg=panel,fg=muted).pack(side='left',padx=10)
+
+        # Dedicated video player. Settings are independent for the two displays.
+        tk.Label(video_tab,text='VIDEO PLAYER  /  USB PERFORMANCE',bg=bg,fg=fg,
+                 font=('Segoe UI',13,'bold')).pack(anchor='w',padx=22,pady=(20,8))
+        tk.Label(video_tab,text='Choose a local video and target display. Playback loops silently. Actual USB FPS is shown in Diagnostics.',
+                 bg=bg,fg=muted,wraplength=760,justify='left').pack(anchor='w',padx=22,pady=(0,10))
+        self.video_controls=[]
+        for i in range(2):
+            cfg=self.video_configs[i]
+            card=tk.Frame(video_tab,bg=panel,highlightbackground='#2A4057',highlightthickness=1)
+            card.pack(fill='x',padx=22,pady=8)
+            tk.Label(card,text=f'DISPLAY {i+1}',bg=panel,fg=fg,font=('Segoe UI',11,'bold')).pack(anchor='w',padx=12,pady=(10,6))
+            path=tk.StringVar(value=cfg.get('video_path',''))
+            row=tk.Frame(card,bg=panel);row.pack(fill='x',padx=12,pady=4)
+            tk.Entry(row,textvariable=path,bg='#23354b',fg=fg,insertbackground=fg,relief='flat').pack(side='left',fill='x',expand=True,ipady=7)
+            tk.Button(row,text='Browse video',command=lambda v=path:self._browse_video(v),bg='#304a66',fg=fg,relief='flat').pack(side='left',padx=8)
+            options=tk.Frame(card,bg=panel);options.pack(fill='x',padx=12,pady=(8,12))
+            fit=tk.StringVar(value=cfg.get('video_fit','Cover'))
+            resolution=tk.StringVar(value=str(cfg.get('video_resolution',240)))
+            fps=tk.StringVar(value=str(cfg.get('video_fps',25)))
+            window=tk.StringVar(value=cfg.get('video_window','96x72'))
+            for caption,var,choices in [('Fit',fit,['Cover','Contain','Stretch']),
+                                        ('Decode width',resolution,['160','240','320','480']),
+                                        ('Target FPS',fps,['15','20','25','30']),
+                                        ('Video size',window,['96x72','128x96','160x120','192x144','110p FULLSCREEN'])]:
+                tk.Label(options,text=caption,bg=panel,fg=muted).pack(side='left',padx=(0,5))
+                ttk.Combobox(options,textvariable=var,values=choices,state='readonly',width=9).pack(side='left',padx=(0,18))
+            tk.Button(options,text='Play on display',bg='#315c70',fg=fg,relief='flat',padx=10,pady=6,
+                      command=lambda j=i:self._play_video(j)).pack(side='right')
+            self.video_controls.append((path,fit,resolution,fps,window))
+        tk.Label(video_tab,text='110p FULLSCREEN upscales a 160x110 source to 480x320 on the PC. USB still sends 300 KiB/frame, so this mode is much slower. Other sizes keep fast compact transfer.',
+                 bg=bg,fg=muted,wraplength=780,justify='left').pack(anchor='w',padx=22,pady=8)
+
+        # Phone remote: opt-in LAN server; QR code includes address only, never PIN.
+        remote_box=tk.Frame(remote_tab,bg=panel,highlightbackground='#2A4057',highlightthickness=1)
+        remote_box.pack(fill='x',padx=18,pady=(22,10))
+        tk.Label(remote_box,text='PHONE REMOTE / QR',bg=panel,fg=fg,font=('Segoe UI',11,'bold')).pack(anchor='w',padx=12,pady=(9,4))
+        self.remote_info=tk.StringVar(value='Remote disabled')
+        tk.Label(remote_box,textvariable=self.remote_info,bg=panel,fg=muted,justify='left').pack(anchor='w',padx=12)
+        self.remote_qr=tk.Label(remote_box,bg=panel)
+        self.remote_qr.pack(side='right',padx=16,pady=6)
+        tk.Button(remote_box,text='Enable remote + QR',command=self.enable_remote,bg='#304a66',fg=fg,relief='flat',padx=10,pady=7).pack(side='left',padx=12,pady=9)
+        tk.Button(remote_box,text='Disable remote',command=self.disable_remote,bg='#304a66',fg=fg,relief='flat',padx=10,pady=7).pack(side='left',padx=4,pady=9)
 
         self._label(logs_tab,'log',bg=bg,fg=fg,font=('Segoe UI',12,'bold')).pack(anchor='w',padx=18,pady=(18,10))
         self.logbox=tk.Text(logs_tab,bg='#111d2e',fg='#b7d8ee',font=('Consolas',9),
@@ -357,6 +462,74 @@ class App:
         # Manual launches still open normally and wait for the Start button.
         if '--autostart' in sys.argv:
             root.after(1000,self._autostart_session)
+    def enable_remote(self):
+        if self.remote_server:return
+        server=RemoteServer(self.remote_commands.put,RENDER.keys(),self.remote_previews)
+        try:
+            server.start()
+            self.remote_server=server
+            url=f'http://{lan_ip()}:{PORT}/'
+            self.remote_info.set(f'Open on phone: {url}\nPairing PIN: {server.pin} (keep private)')
+            try:
+                import qrcode
+                qr=qrcode.QRCode(box_size=4,border=2)
+                qr.add_data(url);qr.make(fit=True)
+                self.remote_qr_photo=ImageTk.PhotoImage(qr.make_image(fill_color='black',back_color='white').convert('RGB'))
+                self.remote_qr.configure(image=self.remote_qr_photo)
+            except ImportError:
+                self.remote_info.set(self.remote_info.get()+'\nQR dependency missing (qrcode)')
+            self.log('Phone remote enabled: '+url)
+        except OSError as exc:
+            messagebox.showerror('TURMO Remote','Cannot start local web server: '+str(exc))
+
+    def disable_remote(self):
+        server=self.remote_server
+        self.remote_server=None
+        if server:threading.Thread(target=server.stop,daemon=True).start()
+        self.remote_info.set('Remote disabled')
+        self.remote_qr.configure(image='')
+        self.remote_qr_photo=None
+
+    def _remote_action(self,action):
+        kind=action.get('action')
+        if kind=='stop':self.halt()
+        elif kind=='start':self.start(quiet=True)
+        elif kind=='brightness':
+            i=action['display'];v=action['value']
+            self.brightness_vars[i].set(v)
+            self._brightness_changed(i,v)
+        elif kind=='phone_image':
+            i=action['display']
+            self.custom_configs[i]=dict(default_layout(),widgets=[],media=action['path'],media_fit='contain',phone_photo=True)
+            self.tvars[i].set('Custom')
+            self.remember_settings()
+            self.log(f'Phone image received for display {i+1}: {action["path"]}')
+            if any(t.is_alive() for t in self.threads) or (self.telemetry is not None and self.telemetry.is_alive()):
+                self.halt()
+                self.root.after(150,self._remote_restart)
+            else:
+                self.preview()
+                self.start(quiet=True)
+        elif kind=='theme':
+            i=action['display'];theme=action['theme']
+            self.tvars[i].set(theme)
+            self.remember_settings()
+            # The active display thread has a fixed renderer; restart to apply.
+            if any(t.is_alive() for t in self.threads):
+                self.halt()
+                self.root.after(700,self._remote_restart)
+            else:self.preview()
+
+    def _remote_restart(self):
+        if any(t.is_alive() for t in self.threads) or (self.telemetry is not None and self.telemetry.is_alive()):
+            self.root.after(250,self._remote_restart)
+        else:
+            self.log('Phone remote: restarting displays with new image/theme')
+            self.start(quiet=True)
+
+    def check_updates(self):
+        check_and_update(self.root, self.update_status.set, self.close)
+
     def _tr(self,key,**kwargs):
         template=self.locales.get(self.lang,self.locales['en']).get(key,self.locales['en'].get(key,key))
         return template.format(**kwargs)
@@ -387,16 +560,21 @@ class App:
     def _setup_style(self, root):
         style=ttk.Style(root)
         style.theme_use('clam')
-        style.configure('TNotebook',background='#0c111c',borderwidth=0,tabmargins=(0,0,0,0))
-        style.configure('TNotebook.Tab',background='#19283b',foreground='#aabdd2',
-                        font=('Segoe UI',10,'bold'),padding=(22,11),borderwidth=0)
-        style.map('TNotebook.Tab',background=[('selected','#29435f')],
+        style.configure('TNotebook',background='#0A0F19',borderwidth=0,tabmargins=(0,0,0,0))
+        style.configure('TNotebook.Tab',background='#18283A',foreground='#A9BFD2',
+                        font=('Segoe UI',10,'bold'),padding=(23,13),borderwidth=0)
+        style.map('TNotebook.Tab',background=[('selected','#285568')],
                   foreground=[('selected','#ffffff')])
-        style.configure('TCombobox',foreground='#eaf3ff',fieldbackground='#25364d',
-                        background='#25364d',arrowcolor='#70d5eb',padding=6)
-        style.map('TCombobox',fieldbackground=[('readonly','#25364d')],
-                  selectbackground=[('readonly','#25364d')],
-                  selectforeground=[('readonly','#eaf3ff')])
+        style.configure('TFrame',background='#0A0F19')
+        style.configure('TLabel',background='#0A0F19',foreground='#F2F6FC',font=('Segoe UI',10))
+        style.configure('TSeparator',background='#2A4057')
+        style.configure('TCheckbutton',background='#141E2D',foreground='#F2F6FC',font=('Segoe UI',10))
+        style.map('TCheckbutton',background=[('active','#141E2D')],foreground=[('active','#63E2D2')])
+        style.configure('TCombobox',foreground='#F2F6FC',fieldbackground='#1C3044',
+                        background='#1C3044',arrowcolor='#7BE7D8',padding=6)
+        style.map('TCombobox',fieldbackground=[('readonly','#1C3044')],
+                  selectbackground=[('readonly','#1C3044')],
+                  selectforeground=[('readonly','#F2F6FC')])
 
     def log(self,msg):
         self.logbox.insert('end',msg+'\n');self.logbox.see('end')
@@ -438,7 +616,12 @@ class App:
         self.tray_error=False
         for i,lbl in enumerate(self.pvlabels):
             theme=self.tvars[i].get()
-            if theme=='Custom':
+            if theme=='VIDEO PLAYER':
+                
+                with self.remote_previews.lock:
+                    im=self.remote_previews.frames[i]
+                if im is None:im=Image.new('RGB',(480,320),'#0C1522')
+            elif theme=='Custom':
                 cfg=self.custom_configs[i]
                 media=cfg.get('media','')
                 active=self.preview_videos[i]
@@ -453,7 +636,21 @@ class App:
                 im=render_custom(cfg,values,bg)
             else:
                 if active:=self.preview_videos[i]:active.close();self.preview_videos[i]=None
-                if theme=='MUSIC VISUALIZER':
+                if theme=='AUTO / SMART MODE':
+                    chosen=select_theme(values)
+                    if chosen=='MUSIC VISUALIZER 2.0':
+                        im=self.music_v2_previews[i].render(values)
+                    elif chosen=='SMART WEATHER CLOCK':
+                        im=self.smart_previews[i].render(values)
+                    else:
+                        im=RENDER[chosen](values)
+                elif theme=='MUSIC VISUALIZER 2.0':
+                    im=self.music_v2_previews[i].render(values)
+                elif theme=='MIDNIGHT EQ':
+                    im=self.midnight_previews[i].render(values)
+                elif theme=='FULL SCREEN COLOR EQ':
+                    im=self.full_eq_previews[i].render(values)
+                elif theme=='MUSIC VISUALIZER':
                     im=self.music_previews[i].render(values)
                 elif theme=='SMART WEATHER CLOCK':
                     im=self.smart_previews[i].render(values)
@@ -481,6 +678,32 @@ class App:
                            self.readings)
         editor.open_video()
 
+    def _browse_video(self,variable):
+        path=filedialog.askopenfilename(parent=self.root,title='Choose video',
+                                        filetypes=[('Video files','*.mp4 *.mkv *.mov *.avi *.webm'),('All files','*.*')])
+        if path:variable.set(path)
+
+    def _play_video(self,index):
+        path,fit,resolution,fps,window=self.video_controls[index]
+        video=path.get().strip()
+        if not Path(video).is_file():
+            messagebox.showerror('Video','Select an existing video file first.')
+            return
+        self.video_configs[index]={'video_path':video,'video_fit':fit.get(),
+                                   'video_resolution':int(resolution.get()),'video_fps':int(fps.get()),
+                                   'video_window':window.get()}
+        self.tvars[index].set('VIDEO PLAYER')
+        self.remember_settings()
+        if any(t.is_alive() for t in self.threads):
+            self.halt()
+            self.root.after(800,self._restart_video_when_stopped)
+        else:self.start()
+
+    def _restart_video_when_stopped(self):
+        if any(t.is_alive() for t in self.threads):
+            self.root.after(250,self._restart_video_when_stopped)
+        else:self.start()
+
     def detect_screens(self):
         devices=discover_screens()
         available=[p.device for p in devices]
@@ -503,6 +726,7 @@ class App:
                        'themes':[v.get() for v in self.tvars],
                        'orientations':[v.get() for v in self.ovars],
                        'custom_configs':self.custom_configs,
+                       'video_configs':self.video_configs,
                        'brightness':[b.get() for b in self.brightness],
                        'language':self.lang,
                        'weather_city':self.weather_city.get().strip()})
@@ -524,6 +748,7 @@ class App:
             return
         self.remember_settings()
         self.stop=threading.Event()
+        self.remote_previews.clear()
         self.telemetry=Telemetry(self.events,self.stop)
         self.telemetry.start()
         original_get=self.telemetry.get
@@ -535,24 +760,28 @@ class App:
         self.telemetry.get=merged_get
         self.threads=[]
         for i,port in active:
-            t=ScreenThread(port,self.tvars[i].get(),self.ovars[i].get(),self.telemetry,self.events,self.stop,self.custom_configs[i],self.brightness[i])
+            t=ScreenThread(port,self.tvars[i].get(),self.ovars[i].get(),self.telemetry,self.events,self.stop,(self.video_configs[i] if self.tvars[i].get()=='VIDEO PLAYER' else self.custom_configs[i]),self.brightness[i],self.remote_previews,i)
             self.threads.append(t);t.start()
         self.log('Started: '+', '.join(port for _,port in active))
     def halt(self):
         self.stop.set()
+        self.remote_previews.clear()
         self.log('Stopping after current frame...')
     def poll(self):
+        while not self.remote_commands.empty():
+            try:self._remote_action(self.remote_commands.get_nowait())
+            except Exception as exc:self.log("Remote action error: "+str(exc))
         while not self.events.empty():
             port,msg=self.events.get()
             self.log(f'{port}: {msg}')
         self.preview()
         self.root.after(2000,self.poll)
     def _tray_image(self):
-        image=Image.new('RGB',(64,64),'#101a29')
+        image=Image.new('RGB',(64,64),'#0C1522')
         draw=ImageDraw.Draw(image)
-        draw.rounded_rectangle((5,8,59,52),radius=9,fill='#223a53',outline='#53c4ee',width=3)
-        draw.rectangle((14,18,50,42),fill='#53c4ee')
-        draw.rectangle((24,54,40,58),fill='#53c4ee')
+        draw.rounded_rectangle((5,8,59,52),radius=9,fill='#223a53',outline='#63E2D2',width=3)
+        draw.rectangle((14,18,50,42),fill='#63E2D2')
+        draw.rectangle((24,54,40,58),fill='#63E2D2')
         return image
 
     def _ensure_tray(self):
@@ -595,6 +824,10 @@ class App:
         self.start(quiet=True)
 
     def close(self):
+        if self.remote_server:
+            self.remote_server.httpd.shutdown()
+            self.remote_server.httpd.server_close()
+            self.remote_server=None
         if self.tray_icon is not None:
             try:self.tray_icon.stop()
             except Exception:pass

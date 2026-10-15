@@ -1,5 +1,6 @@
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
+from hardware_info import cpu_model
 W,H=480,320
 NAVY=(8,15,27); BLUE=(62,200,250); RED=(255,78,92); WHITE=(241,246,252); MUTED=(151,169,191)
 
@@ -27,7 +28,7 @@ def header(d,title,color,subtitle):
 
 def system(s):
     im=Image.new('RGB',(W,H),NAVY);d=ImageDraw.Draw(im)
-    header(d,'SYSTEM  /  MONITOR',BLUE,'RYZEN 7 7800X3D  •  DDR5')
+    header(d,'SYSTEM  /  MONITOR',BLUE,cpu_model().upper()[:44])
     panel(d,(14,65,234,181),(19,34,53));panel(d,(246,65,466,181),(19,34,53))
     label(d,28,77,'PROCESSOR',13,MUTED,True)
     label(d,28,95,fmt(s.get('cpu'),'%'),38,WHITE,True)

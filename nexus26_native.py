@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from hardware_info import cpu_model
 W,H=480,320
 
 def draw_centered_text(draw, cx, y, text, font, fill):
@@ -346,7 +347,7 @@ class Nexus26:
         fSmall=self.fonts['fSmall']
         fMicro=self.fonts['fMicro']
         fNano=self.fonts['fNano']
-        real_model='RYZEN 7 7800X3D'
+        real_model=cpu_model().upper()
         real_os='Windows'
         os_logo_img=self.logo
         m_now=time.monotonic()

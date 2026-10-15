@@ -14,6 +14,8 @@ class NowPlaying(threading.Thread):
         self.data=dict(EMPTY)
         self._last_message=None
         self._sample_time=time.monotonic()
+        self._last_good_timeline=None
+        self._last_good_track=None
         self._track_id=None
         self._anchor_position=0.0
         self._anchor_time=time.monotonic()
@@ -118,6 +120,16 @@ class NowPlaying(threading.Thread):
             with self.lock:
                 now=time.monotonic()
                 track=(chosen.get('music_title'),chosen.get('music_artist'))
+                # Some Windows media sessions intermittently omit the timeline.
+                # Preserve the last valid duration/position for the same track.
+                if track != self._last_good_track:
+                    self._last_good_track=track
+                    self._last_good_timeline=None
+                if chosen.get('music_duration') and chosen.get('music_position') is not None:
+                    self._last_good_timeline=(chosen['music_duration'],chosen['music_position'])
+                elif self._last_good_timeline and track[0]:
+                    chosen['music_duration']=self._last_good_timeline[0]
+                    chosen['music_position']=self._anchor_position + (now-self._anchor_time if chosen.get('music_playing') else 0)
                 position=chosen.get('music_position')
                 duration=chosen.get('music_duration')
                 if track!=self._track_id:
@@ -140,4 +152,4 @@ class NowPlaying(threading.Thread):
                     chosen['music_position']=self._anchor_position
                 self.data=chosen
                 self._sample_time=now
-            await asyncio.sleep(3)
+            await asyncio.sleep(1)

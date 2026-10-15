@@ -1,0 +1,1 @@
+v0.28.29: Telefonos kepkuldeshez kulon 16 soros USB kepatvitel, reszletes betoltesi naplo. A tobbi tema es Video Player valtozatlan. A kep kezdetben savonkent jelenhet meg. Ha Write timeout marad, ellenorizd az USB kabelt es a naplot.

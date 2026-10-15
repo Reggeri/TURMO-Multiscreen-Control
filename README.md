@@ -1,3 +1,9 @@
+### v0.28.7 Music timeline and title fix
+Improved timeline persistence and smoother marquee. Playback progress requires a duration reported by the Windows media session.
+
+### v0.28.6 Music Visualizer performance fix
+The lower-left label no longer overlaps another label. The EQ uses a compact 16-bar display region and cached background to reduce USB bandwidth. Real-world FPS depends on USB transport and firmware; it is not guaranteed.
+
 <div align="center">
 
 # TURMO Control
@@ -82,4 +88,12 @@ Music visualizer inspired by [spel987/turing-3.5-screen-music-visualizer](https:
 
 ## Project status
 
-**v0.28.1** — community project under active development. Features have been exercised on compatible physical screens, but Windows builds, firmware compatibility, scheduled-task behavior and individual media players may vary. Issues and pull requests are welcome.
+**v0.28.3** — community project under active development. Features have been exercised on compatible physical screens, but Windows builds, firmware compatibility, scheduled-task behavior and individual media players may vary. Issues and pull requests are welcome.
+
+
+### In-app updates (v0.28.3)
+Open **Settings → Check for updates**. TURMO checks the latest published GitHub Release of `Reggeri/TURMO-Multiscreen-Control` and, with your confirmation, downloads its attached `TURMO-Control.exe` (or ZIP containing that EXE), replaces the installed EXE and restarts. This requires the packaged Windows build and an accessible GitHub connection. Publish the newly built EXE as a Release asset, not only as an Actions artifact. Keep the installed EXE in a writable location and avoid renaming its release asset to an unrelated name.
+
+
+### New in v0.28.4
+Select **AUTO / SMART MODE** in the theme dropdown to switch based on activity. Actively playing Windows media takes priority, followed by a recognized foreground game, then idle clock after five minutes, otherwise System Neon. Game detection covers a conservative list of common game executable names; unknown games fall back to System Neon. Select **MUSIC VISUALIZER 2.0** for the separate updated media theme. Its animated bars are decorative and do not represent measured sound frequencies.

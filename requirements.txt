@@ -10,3 +10,8 @@ winrt-Windows.Foundation>=3.0; sys_platform == "win32"
 winrt-Windows.Foundation.Collections>=3.0; sys_platform == "win32"
 
 pystray>=0.19.5,<1
+
+numpy>=1.26,<3
+soundcard>=0.4.4,<1
+
+qrcode>=7.4,<9

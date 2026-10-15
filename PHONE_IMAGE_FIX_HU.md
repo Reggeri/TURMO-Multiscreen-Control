@@ -1,0 +1,1 @@
+v0.28.28: Telefonos képküldés után a kijelző újraindítása megvárja a telemetria szál leállását is. Korábban a start() csendben visszatérhetett, ha a telemetria még futott. Ha nem futott kijelző, a kép küldése most automatikusan elindítja azt. A képküldés naplózva van.

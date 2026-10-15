@@ -1,0 +1,1 @@
+v0.28.32: A frekvenciasávok szomszédos FFT értékeket is figyelembe vesznek, így egyetlen néma frekvenciabin nem fagyasztja le a harmadik oszlopot. A MIDNIGHT EQ 30 másodpercenként teljes képkockát küld a beragadt pixelek eltüntetésére. A Full Screen Color EQ és a videómód változatlan. A teljes frissítés pillanatnyi akadást okozhat.
